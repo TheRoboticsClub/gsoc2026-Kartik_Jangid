@@ -16,7 +16,18 @@ ninja.data = [{
           handler: () => {
             window.location.href = "/gsoc2026-Kartik_Jangid/blog/";
           },
-        },{
+        },{id: "post-community-bonding-weeks-1-amp-2",
+        
+          title: "Community Bonding: Weeks 1 &amp; 2",
+        
+        description: "",
+        section: "Posts",
+        handler: () => {
+          
+            window.location.href = "/gsoc2026-Kartik_Jangid/blog/2026/community-bonding-weeks-1-and-2/";
+          
+        },
+      },{
         id: 'social-github',
         title: 'GitHub',
         section: 'Socials',

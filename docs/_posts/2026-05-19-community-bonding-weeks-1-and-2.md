@@ -8,7 +8,7 @@ tags: [docker, podman, ros2, robotics, gsoc2026, jderobot]
 author: Kartik Jangid
 ---
 
-![JdeRobot GSoC 2026](/assets/images/logo.png)
+![JdeRobot GSoC 2026]({{ "/assets/images/logo.png" | relative_url }})
 
 I got selected for GSoC 2026 with **JdeRobot**, and the first two weeks have been mostly reading code, running `grep` on Dockerfiles, and slowly building a map of how this platform actually works.
 
@@ -31,9 +31,9 @@ Before I get into the work, I want to introduce the mentors I'm working with —
 
 The first thing I did was clone [RADI](https://github.com/JdeRobot/RoboticsApplicationManager) and [RoboticsBackend](https://github.com/JdeRobot/RoboticsBackend) on my Kubuntu machine and get the legacy environment running. There was a bit of initial setup friction, but I eventually got the Django frontend routing confirmed on **port 7164**.
 
-![Local Setup](/assets/images/local_setup.png)
+![Local Setup]({{ "/assets/images/local_setup.png" | relative_url }})
 
-![JdeRobot Logo](/assets/images/JdeRobot_Gsoc_Logo.webp)
+![JdeRobot Logo]({{ "/assets/images/JdeRobot_Gsoc_Logo.webp" | relative_url }})
 
 The kickoff meeting with David went well. We went through the project milestones, talked about what the refactor needs to accomplish, and set expectations for the coding period. David gave me one piece of advice early on that turned out to be useful: don't assume this stack works like a standard web app. I took note of that, and it saved me from a wrong assumption later in the week.
 

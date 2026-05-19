@@ -1,0 +1,45 @@
+name: Deploy site
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "docs/**"
+  pull_request:
+    branches:
+      - master
+      - main
+    paths:
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v4
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2.2"
+          bundler-cache: true
+          cache-version: 1
+      - name: Install dependencies 🔧
+        run: bundle install
+        working-directory: docs
+      - name: Install and Build 🔧
+        run: |
+          export JEKYLL_ENV=production
+          bundle exec jekyll build
+        working-directory: docs
+      - name: Deploy 🚀
+        if: github.event_name != 'pull_request'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: docs/_site

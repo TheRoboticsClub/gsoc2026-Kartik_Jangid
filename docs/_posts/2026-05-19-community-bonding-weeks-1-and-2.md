@@ -66,7 +66,7 @@ grep -c 'rm -rf /var/lib/apt/lists/\*' Dockerfile.dependencies_humble
 |---|---|
 | Total layer-altering instructions (`RUN`, `COPY`, `ADD`) | **59** |
 | Independent `apt-get install` blocks | **17** |
-| `rm -rf /var/lib/apt/lists/*` cache purges | **13** |
+| `rm -rf /var/lib/apt/lists/*` cache purges | **12** |
 | Net leaking layers | **≥ 4** |
 
 The static grep analysis gave us the structure of the problem — **59** layer-altering instructions, **17** separate apt install blocks, and at least **4** layers leaking apt cache. But structure alone does not tell you where the gigabytes and the minutes go. That required running actual measurements against the pulled image, which the sections below document in full.
@@ -90,11 +90,11 @@ Running `docker history jderobot/robotics-academy:latest --no-trunc --format "{{
 
 | Rank | Layer Size | What It Does | Which Dockerfile |
 |---|---|---|---|
-| 1 | **7.9 GB** | pip install torch with CUDA 12.8 support | `Dockerfile.humble` |
-| 2 | **4.61 GB** | git clone RoboticsInfrastructure full repository | `Dockerfile.humble` |
+| 1 | **7.9 GB** | pip install torch with CUDA 12.8 support | `Dockerfile.dependencies_humble` |
+| 2 | **4.61 GB** | git clone RoboticsInfrastructure (shallow, --depth 1) | `Dockerfile.humble` |
 | 3 | **2.91 GB** | mv packages from clone into ROS2 workspace | `Dockerfile.humble` |
 | 4 | **2.39 GB** | install-ompl-ubuntu.sh — compile OMPL from source | `Dockerfile.dependencies_humble` |
-| 5 | **1.87 GB** | apt-get install gazebo11 + gstreamer plugins | `Dockerfile.humble` |
+| 5 | **1.87 GB** | apt-get install gazebo11 + gstreamer plugins | `Dockerfile.dependencies_humble` |
 | 6 | **1.78 GB** | yarn install && yarn run build React frontend | `Dockerfile.humble` |
 | 7 | **1.3 GB** | pip install ML packages (onnxruntime-gpu, opencv, numpy) | `Dockerfile.dependencies_humble` |
 | 8 | **628 MB** | colcon build && colcon build IndustrialRobots workspace | `Dockerfile.dependencies_humble` |
@@ -107,7 +107,7 @@ Running `docker history jderobot/robotics-academy:latest --no-trunc --format "{{
 | 15 | **384 MB** | colcon build --symlink-install Aerostack2 workspace | `Dockerfile.dependencies_humble` |
 | 16 | **375 MB** | apt-get install libeigen3 + 40 ros-humble packages + MoveIt | `Dockerfile.dependencies_humble` |
 | 17 | **292 MB** | git clone IndustrialRobots | `Dockerfile.dependencies_humble` |
-| 18 | **279 MB** | apt-get install nodejs + yarn | `Dockerfile.humble` |
+| 18 | **279 MB** | apt-get install nodejs + yarn | `Dockerfile.dependencies_humble` |
 | 19 | **267 MB** | apt-get install gz-harmonic Gazebo Harmonic | `Dockerfile.dependencies_humble` |
 | 20 | **224 MB** | git clone RoboticsAcademy | `Dockerfile.humble` |
 | 21 | **163 MB** | apt-get install xvfb x11vnc xterm VNC and X11 stack | `Dockerfile.dependencies_humble` |
@@ -115,7 +115,7 @@ Running `docker history jderobot/robotics-academy:latest --no-trunc --format "{{
 | 23 | **115 MB** | git clone aerostack2 -b robotics-academy-fix | `Dockerfile.dependencies_humble` |
 | 24 | **105 MB** | add-apt-repository ppa:openrobotics/gazebo11-gz-cli | `Dockerfile.dependencies_humble` |
 | 25 | **94.5 MB** | Install VirtualGL and TurboVNC | `Dockerfile.dependencies_humble` |
-| 26 | **79 MB** | apt-get install postgresql-18 | `Dockerfile.humble` |
+| 26 | **79 MB** | apt-get install postgresql-18 | `Dockerfile.dependencies_humble` |
 | 27 | **77.8 MB** | Base Ubuntu 22.04 layer | base image |
 | 28 | **69.9 MB** | apt-get install tmux ros-dev-tools python3-pip | `Dockerfile.dependencies_humble` |
 | 29 | **64.1 MB** | pip install --upgrade pip wheel setuptools selenium | `Dockerfile.dependencies_humble` |

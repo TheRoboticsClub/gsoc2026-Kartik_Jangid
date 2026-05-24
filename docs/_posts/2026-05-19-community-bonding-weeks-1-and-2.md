@@ -183,50 +183,39 @@ The actual flow is:
 
 Django just handles frontend routing and file writes. RAM is where execution actually happens.
 
-### `--userns=keep-id` for Podman
-
-Because RAM uses `subprocess.Popen()`, the student's running code inherits RAM's UID/GID. In rootless Podman without `--userns=keep-id`, that UID gets remapped to an unprivileged one that can't write to the bind-mounted `/workspace/code/` volume, and RAM will error out.
-
-```bash
-# Works: host UID maps into the container correctly
-podman run --userns=keep-id -v /workspace/code:/workspace/code ...
-
-# Breaks: internal UID gets remapped, volume writes fail
-podman run -v /workspace/code:/workspace/code ...
-```
-
-So `--userns=keep-id` isn't optional for this migration — it's a requirement based on how RAM works.
-
-### GPU Access via CDI
-
-The other Podman constraint involves GPU acceleration. The legacy Docker setup uses the NVIDIA container runtime, which requires root. In rootless Podman, the equivalent is the **Container Device Interface (CDI)** — a standardized spec that lets Podman expose GPU devices into the container without needing a privileged daemon. The Podman migration plan has to include generating the CDI config for the NVIDIA device and passing `--device nvidia.com/gpu=all` (or equivalent) at runtime, rather than relying on the old `--gpus all` Docker flag.
+This distinction matters directly for the Podman migration. Because student code runs under RAM's UID via `subprocess.Popen`, any rootless container setup has to preserve that UID mapping correctly or volume writes will silently fail. The CDI requirement for GPU access follows from the same constraint — rootless execution cannot use the NVIDIA daemon runtime. Both of these are implementation problems for the coding period, not community bonding. The point here is that I now know exactly where the constraints come from.
 
 ---
 
 ## The Telemetry Bridge
 
-I also looked into how ROS 2 data gets from simulation topics to the browser. I expected to find `rosbridge_suite` in the dependencies. It's not there.
+I also confirmed how ROS 2 simulation data reaches the browser.
+There is no `rosbridge_suite` in the dependencies. Instead, each
+exercise backend spawns a native `rclpy` node that pushes data
+over WebSockets on **port 2303** to the React `CommsManager`.
 
-Instead, JdeRobot uses a custom Python framework. Each exercise backend spawns a native `rclpy` node, subscribes to local simulation topics like `/webgui/user_map`, and pushes the data over WebSockets on **port 2303** to the React `CommsManager`.
-
-One finding from this trace has a direct impact on how the multi-stage Dockerfile must be written. There is a **custom-patched `websocket_server.py`** sitting in the RAM source tree. It fixes an `OPCODE_CONTINUATION` bug in the upstream websocket-server Python library. In a naive multi-stage build, the runtime stage would run `pip install websocket-server` and silently overwrite this patch with the unmodified upstream version. The telemetry pipeline would break with no obvious error. The fix is to explicitly `COPY --from=builder` this specific file into the runtime stage after the `pip install` layer runs — ordering matters here.
+One thing flagged here that directly affects the multi-stage build:
+there is a **custom-patched `websocket_server.py`** in the RAM source
+tree that fixes an `OPCODE_CONTINUATION` bug in the upstream library.
+A naive `pip install websocket-server` in the runtime stage would
+silently overwrite this patch and break the telemetry pipeline.
+This file needs explicit handling in the build — the exact strategy
+will be documented in Week 1 of the coding period.
 
 ---
 
 ## Camera Feeds and Wayland
 
-One thing I was uncertain about was whether migrating from X11/TurboVNC to Wayland would break the drone camera feeds. After tracing through the vision pipeline, the answer is: it depends on which part of the frontend you're talking about.
+One concern I had was whether migrating the display stack would
+break drone camera feeds. After tracing the vision pipeline, the
+answer is: the primary camera feeds encode frames as Base64 via
+**OpenCV** and send them over WebSockets — no dependency on `Xvfb`
+or VNC. Those feeds are safe.
 
-The primary drone camera feeds work like this:
-
-1. `HAL.py` subscribes to `sensor_msgs/Image` topics like `/drone0/frontal_cam/image_raw`.
-2. The Python GUI thread grabs the numpy arrays, encodes them as JPEG via **OpenCV**, and converts them to a Base64 JSON payload.
-3. That payload goes to port **2303** (the CommsManager).
-4. The React frontend puts the Base64 string directly into an `<img>` tag.
-
-That chain has no dependency on the virtual display stack — no `Xvfb`, no VNC. So for those feeds specifically, the Wayland migration doesn't change anything.
-
-However, the official architecture diagram shows a different story for the Gazebo simulator itself: the web frontend includes **VNC viewers** (`Visores VNC`) that connect directly to the Gazebo simulation window. That part of the platform does rely on the VNC pipeline, and any X11-to-Wayland transition will need to account for it. The core camera feeds are safe; the full Gazebo desktop view is not.
+The Gazebo simulation window is a different story — it does rely
+on the VNC pipeline. The X11-to-Wayland transition needs to
+account for that separately. Core camera feeds safe, full Gazebo
+desktop view is not a free migration.
 
 ---
 
@@ -248,25 +237,21 @@ However, the official architecture diagram shows a different story for the Gazeb
 - [x] Confirmed live filesystem waste via `du -sh` inside running container
 - [x] Traced execution pipeline: Django → RAM → `subprocess.Popen`
 - [x] Confirmed `--userns=keep-id` is required for rootless Podman
-- [x] Found custom-patched `websocket_server.py` — documented preservation strategy for multi-stage build
-- [x] Confirmed camera feeds bypass X11 — Wayland migration will not break them
+- [x] Found custom-patched `websocket_server.py` — flagged as risk for multi-stage build
+- [x] Confirmed primary camera feeds bypass X11 — Gazebo VNC pipeline requires separate handling
 - [x] Ran `dive --ci` image efficiency analysis — flagged disabled `highestWastedBytes` rule
 
 ---
 
 ## What's Next
 
-Week 1 of the coding period starts tomorrow. The baseline is fully documented — every layer has a measured size, every expensive component has a measured build time, and the live filesystem waste is confirmed. The work now shifts from measuring to fixing.
+Week 1 of the coding period starts tomorrow. The baseline is fully
+documented — every layer has a measured size, every expensive
+component has a measured build time, and the live filesystem waste
+is confirmed.
 
-The immediate tasks are:
-
-- Draft the multi-stage `Dockerfile.dependencies_humble` — separating the builder stage (OMPL compilation, Aerostack2 colcon build, IndustrialRobots colcon build) from the runtime stage (install trees only)
-- Implement the `COPY --from=builder` instructions to carry only compiled `install/` directories across stage boundaries
-- Write the `entrypoint.sh` dynamic `AMENT_PREFIX_PATH` injection to replace the current `.bashrc` approach
-- Fix the ghost layer pattern in `Dockerfile.humble` by collapsing the RoboticsInfrastructure clone and all `mv` operations into a single `RUN` instruction
-- Preserve the patched `websocket_server.py` explicitly in the runtime stage after `pip install`
-
-The before-baseline is locked. Every optimization will be measured against these exact numbers.
+The before-baseline is locked. Every optimization will be measured
+against these exact numbers.
 
 ---
 

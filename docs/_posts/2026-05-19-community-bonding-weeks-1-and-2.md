@@ -138,6 +138,67 @@ To understand where build time is actually spent, each expensive layer was measu
 
 All times measured on Lenovo Legion 5 (Ryzen 5 4600H, GTX 1650, **16 GB RAM**). The OMPL measurement is the most significant — **34 minutes** for a single component means any change to a layer before OMPL in `Dockerfile.dependencies_humble` invalidates the cache and forces a full 34-minute recompile of that layer alone, with all subsequent layers also rebuilding.
 
+### Full Cold Build Measurement
+
+After measuring individual components in isolation, a complete cold 
+build of both Dockerfiles was performed with `--no-cache` to get the 
+true end-to-end baseline. All measurements on **Lenovo Legion 5, 
+Ryzen 5 4600H, GTX 1650, 16 GB RAM, Kubuntu**.
+
+#### Dockerfile.dependencies_humble — Full Build
+
+**Total time: 72 minutes 17 seconds**
+
+Complete per-layer breakdown ranked by time:
+
+| Step | Time | Instruction |
+|---|---|---|
+| [64/70] | **26m56s** | `./install-ompl-ubuntu.sh --github --python` |
+| [23/70] | **7m23s** | `pip install torch --extra-index-url .../cu128` |
+| [45/70] | **5m58s** | `colcon build --symlink-install` Aerostack2 |
+| [44/70] | **5m54s** | `apt-get install libeigen3 + 40 ros-humble packages + MoveIt` |
+| [21/70] | **3m35s** | `pip install onnxruntime-gpu opencv numpy ML stack` |
+| [55/70] | **2m26s** | `colcon build && colcon build` IndustrialRobots double pass |
+| [4/70]  | **2m34s** | `apt-get install ros-humble-ros-base + rviz2 + rosdep` |
+| [17/70] | **2m33s** | `apt-get install lxde-common` |
+| [6/70]  | **2m29s** | `apt-get install gazebo11 + gstreamer plugins` |
+| [8/70]  | **1m59s** | `apt-get install gz-harmonic` |
+| All remaining layers | ~10m | Small apt/pip/git/config steps |
+
+**OMPL alone accounts for 37.2% of the entire Step 1 build time.**
+
+#### Dockerfile.humble — Full Build
+
+**Total time: 30 minutes 6 seconds**
+
+| Step | Time | Instruction |
+|---|---|---|
+| [2/20] | **23m27s** | `git clone RoboticsInfrastructure --depth 1` |
+| [17/20] | **1m44s** | `yarn install && yarn run build` React frontend |
+| [10/20] | **1m32s** | `git clone RoboticsAcademy --depth 1` |
+| [14/20] | **1m32s** | `colcon build --symlink-install /home/ws` |
+| All remaining | ~1m | mv, chmod, zip, config steps |
+
+**The RoboticsInfrastructure clone took 23 minutes 27 seconds — 
+78% of the entire Step 2 build time — on a home internet connection. 
+This is pure network latency with zero CPU involvement.**
+
+#### Combined Total
+
+| | Time |
+|---|---|
+| Dockerfile.dependencies_humble | 72m17s |
+| Dockerfile.humble | 30m06s |
+| **Total cold build** | **102m23s** |
+
+This is the before-baseline. Every optimization in this project will 
+be measured against this number. The difference between this 102-minute 
+local build and the ~45-minute build on institutional infrastructure is 
+almost entirely explained by network speed on two layers: the PyTorch 
+download (7m23s locally, ~1-2m on fast connections) and the 
+RoboticsInfrastructure clone (23m27s locally, ~2-3m on fast connections).
+
+
 ### What Lives Inside the Running Container
 
 Running `docker run --rm --entrypoint bash jderobot/robotics-academy:latest` with `du -sh` against key directories reveals what is actually present on disk inside the container at runtime:

@@ -189,7 +189,8 @@ This is pure network latency with zero CPU involvement.**
 |---|---|
 | Dockerfile.dependencies_humble | 72m17s |
 | Dockerfile.humble | 30m06s |
-| **Total cold build** | **102m23s** |
+| Dockerfile.database | 27s |
+| **Total cold build** | **102m50s** |
 
 This is the before-baseline. Every optimization in this project will 
 be measured against this number. The difference between this 102-minute 
@@ -197,6 +198,8 @@ local build and the ~45-minute build on institutional infrastructure is
 almost entirely explained by network speed on two layers: the PyTorch 
 download (7m23s locally, ~1-2m on fast connections) and the 
 RoboticsInfrastructure clone (23m27s locally, ~2-3m on fast connections).
+The database image (`Dockerfile.database`) builds in 27 seconds 
+and is independent of the other two — it is never a bottleneck.
 
 
 ### What Lives Inside the Running Container
@@ -210,7 +213,7 @@ Running `docker run --rm --entrypoint bash jderobot/robotics-academy:latest` wit
 | `/home/drones_ws/build` (Aerostack2 CMake artifacts) | **346 MB** | Yes |
 | `/home/drones_ws/log` (Aerostack2 colcon logs) | **2.8 MB** | Yes |
 | `/home/drones_ws/install` (Aerostack2 runtime) | **52 MB** | Yes — this is the only part needed |
-| `/home/ws/src` (RoboticsInfrastructure packages) | **2.8 GB** | Yes — required due to --symlink-install |
+| `/home/ws/src` (RoboticsInfrastructure packages) | **2.8 GB** | Yes — confirmed required: `find /home/ws/install -type l` returns symlinks pointing into `src/`. Deleting `src/` breaks the install tree. |
 | `/home/ws/build` (ROS2 workspace build artifacts) | **119 MB** | Yes |
 | `/home/ws/log` (ROS2 workspace colcon logs) | **2.9 MB** | Yes |
 | `/home/ws/install` (ROS2 workspace runtime) | **54 MB** | Yes — runtime install tree |

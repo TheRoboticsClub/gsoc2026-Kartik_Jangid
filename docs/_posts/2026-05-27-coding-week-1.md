@@ -9,7 +9,7 @@ Week 1 had one job: remove the caches. The community bonding period ended with a
 
 Before touching any code I had a sync with the mentors. A few things came out of that conversation that completely shaped how I spent the week.
 
-First: PyTorch. It sits at 7.9 GB in a single layer and Javier mentioned he had already tried replacing it with ONNX Runtime for inference — it did not work. So PyTorch is not something I touch without a proper investigation first. Second: Shariar specifically said making lots of PRs should not be the goal. One well-tested, properly validated change matters more than ten half-finished branches. That framing stuck with me throughout the week.
+First: PyTorch. It sits at 7.9 GB in a single layer and Javier mentioned he had already tried replacing it with ONNX Runtime for inference — it did not work. So PyTorch is not something I touch without a proper investigation first. Second: David specifically said making lots of PRs should not be the goal. One well-tested, properly validated change matters more than ten half-finished branches. That framing stuck with me throughout the week.
 
 The confirmed task for Week 1 was to remove the caches.
 

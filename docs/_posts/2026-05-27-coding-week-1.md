@@ -5,18 +5,20 @@ categories: [gsoc, coding-period]
 tags: [docker, gsoc2026, jderobot, optimization, ros2, cache]
 ---
 
-The baseline was locked. Time to actually break things — carefully.
+Week 1 had one job: remove the caches. The community bonding 
+period ended with a fully measured baseline — 29.5 GB, 102 minutes 
+and 50 seconds cold build time, every layer accounted for. This 
+week was about making the first measurable reduction in those numbers.
 
 Week 1 started with a sync with the mentors before touching any code. 
-That turned out to be the right call. A few things came out of that 
-conversation that completely shaped how I spent the week.
+A few things came out of that conversation that completely shaped how I spent the week.
 
 First: PyTorch. It sits at 7.9 GB in a single layer and Javier mentioned 
 he had already tried replacing it with ONNX Runtime for inference — it 
 didn't work. So that's not something I touch without proper investigation. 
 Second: the mentor specifically said making lots of PRs should not be the 
 goal. One well-tested, properly validated change matters more than ten 
-half-finished branches. That framing helped me stay focused.
+half-finished branches.
 
 The confirmed Week 1 task: remove the caches.
 
@@ -107,7 +109,11 @@ the build ran in about 10 minutes by reusing the already-built
 
 Obvious in hindsight. Took longer than it should have to diagnose.
 
-The `Dockerfile.humble` build took approximately 10 minutes by reusing the already-built week1-cache-fix base layer. A full cold build of both Dockerfiles would take approximately 72 minutes on this hardware.
+The before-baseline for a full cold build was 102m50s 
+(72m17s for dependencies_humble + 30m06s for humble). After 
+the cache fixes, dependencies_humble alone measured 62m52s — 
+a 9m25s reduction. The humble layer was tested with a cached 
+base (10 minutes), not a full cold build.
 
 ---
 
@@ -135,18 +141,49 @@ static-analysis false positive. Both fixed in under five minutes.
 
 ---
 
-## Before vs After
+## Updated Layer Analysis
+
+David asked to repeat the full layer analysis from community bonding 
+against the optimized image. Here is the direct comparison.
 
 Measured on Lenovo Legion 5, Ryzen 5 4600H, GTX 1650, 16 GB RAM, Kubuntu.
+
+| Layer | Before | After | Change |
+|---|---|---|---|
+| PyTorch pip install | 7.9 GB | 4.79 GB | **-3.11 GB** |
+| RoboticsInfrastructure clone | 4.61 GB | 4.78 GB | ~0* |
+| RoboticsInfrastructure mv | 2.91 GB | 3.06 GB | ~0* |
+| OMPL build | 2.39 GB | 2.4 GB | 0 |
+| Gazebo11 + gstreamer | 1.87 GB | 1.87 GB | 0 |
+| yarn install + build | 1.78 GB | 1.8 GB | 0 |
+| ML pip stack | 1.3 GB | 867 MB | **-433 MB** |
+| IndustrialRobots double colcon | 628 MB | 628 MB | 0 |
+| ROS2 base install | 594 MB | 594 MB | 0 |
+| PCL + Gazebo ROS plugins | 580 MB | 580 MB | 0 |
+| lxde-common | 559 MB | 558 MB | 0 |
+| Base toolchain | 495 MB | 495 MB | 0 |
+| Gazebo Harmonic bridge | 468 MB | 468 MB | 0 |
+| NVIDIA GL libs | 385 MB | 385 MB | 0 |
+| Aerostack2 colcon build | 384 MB | 384 MB | 0 |
+| MoveIt + ROS deps | 375 MB | 380 MB | 0 |
+| IndustrialRobots clone | 292 MB | 292 MB | 0 |
+| nodejs + yarn | 279 MB | 175 MB | **-104 MB** |
+| gz-harmonic | 267 MB | 268 MB | 0 |
+| RoboticsAcademy clone | 224 MB | 367 MB | +143 MB** |
+
+*Slight increase due to additional commits in the fork branch used for this build.
+
+**Larger because this build clones from the gsoc-project-7 branch 
+which has more history than the original humble-devel baseline.
+
+**Summary:**
 
 | Metric | Before | After | Change |
 |---|---|---|---|
 | Full image size | 29.5 GB | 26.3 GB | **-3.2 GB** |
-| `dependencies_humble` size | 19.5 GB | 16.1 GB | **-3.4 GB** |
-| Build time (`dependencies_humble`) | 72m17s | 62m52s | **-9m25s** |
-| PyTorch layer | 7.9 GB | 4.79 GB | **-3.1 GB** |
-| ML pip stack layer | 1.3 GB | 867 MB | **-433 MB** |
-| nodejs layer | 279 MB | 175 MB | **-104 MB** |
+| dependencies_humble size | 19.5 GB | 16.1 GB | **-3.4 GB** |
+| dependencies_humble build time | 72m17s | 62m52s | **-9m25s** |
+| Full cold build time | 102m50s | not yet measured | — |
 
 Zero functional changes. Same packages, same versions, same build logic. 
 Just the dead weight removed.
@@ -157,9 +194,7 @@ Just the dead weight removed.
 
 Opened [PR #3848](https://github.com/JdeRobot/RoboticsAcademy/pull/3848) 
 as a draft. Javier responded quickly — appreciated the way the work is 
-documented and tracked. That felt good. This is the first real 
-infrastructure PR I have opened on this project and having it acknowledged 
-properly matters.
+documented and tracked.
 
 Shariar raised a good point in the channel — we need a proper test 
 criterion, specifically running all exercises against the optimized image. 
@@ -191,9 +226,12 @@ That analysis is happening next week alongside the dependency audit.
 
 ## What's Next
 
-The cache cleanup is done. The first 3.2 GB are gone. Next week is about 
-understanding what else can come out — specifically the Python dependency 
-audit and the runtime dependency map that will make the multi-stage 
-build possible without breaking exercises.
+The cache cleanup is done and in a draft PR. Before it merges, 
+two things need to happen: a full cold rebuild to get accurate 
+final numbers, and broader exercise testing across both Gazebo 
+versions the platform supports.
 
-The before-baseline was 29.5 GB. It's 26.3 GB now. The work continues.
+Next week focuses on the Python dependency audit — finding what 
+else can be removed — and beginning the runtime dependency map 
+that will drive the multi-stage build design. The 26.3 GB number 
+will move again.

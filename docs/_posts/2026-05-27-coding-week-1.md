@@ -112,15 +112,15 @@ Javier's requirement before any merge: all exercises must pass. I ran three exer
 
 **Follow Line** — the robot tracked the line correctly, crosshair overlay worked, motion control responsive. No lag even with my GTX 1650.
 
-![Follow Line exercise running on local-no-sns]({{ "/assets/images/week1/follow_line.png" | relative_url }})
+![Follow Line exercise running on local-no-sns]({{ "/assets/images/week1/Screenshot_20260529_160500.png" | relative_url }})
 
 **Basic Vacuum Cleaner** — obstacle avoidance ran as expected, bumper sensor integration intact, robot navigated around objects cleanly.
 
-![Basic Vacuum Cleaner exercise running on local-no-sns]({{ "/assets/images/week1/vacuum_cleaner.png" | relative_url }})
+![Basic Vacuum Cleaner exercise running on local-no-sns]({{ "/assets/images/week1/Screenshot_20260529_162301.png" | relative_url }})
 
 **Laser Mapping** — occupancy grid built correctly, odometry and laser scan fusion working, map populated as the robot moved.
 
-![Laser Mapping exercise running on local-no-sns]({{ "/assets/images/week1/laser_mapping.png" | relative_url }})
+![Laser Mapping exercise running on local-no-sns]({{ "/assets/images/week1/Screenshot_20260529_162411.png" | relative_url }})
 
 All three launched, ran, and produced correct output. No crashes, no missing modules, no broken shared libraries.
 

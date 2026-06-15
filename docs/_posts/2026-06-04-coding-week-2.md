@@ -131,16 +131,14 @@ All four layers passed on `gsoc_test_image_v6` (Image ID: `fcd9373d4326`).
 
 ## What is Next
 
-The 19.2 GB number is the new baseline. A few things need to happen before these changes can merge cleanly.
+The 19.2 GB number is the new baseline. Three items remain before the dependency changes are fully closed.
 
-The CUDA wheel versions — `nvidia-curand-cu12` (10.3.10.19) and `nvidia-cufft-cu12` (11.4.1.4) — are not yet pinned in the Dockerfile. They need to be hard-pinned to prevent silent ABI mismatches from upstream PyPI updates during CI builds.
+The CUDA wheel versions — `nvidia-curand-cu12` and `nvidia-cufft-cu12` — are not yet pinned in the Dockerfile. They need hard pins to prevent silent ABI drift on future CI builds.
 
-The C++ ONNX Runtime headers currently installed in the image are frozen at version 1.17.1 while the Python runtime is at 1.22.0. That version gap is a latent crash variable for any exercises that invoke the C++ API, and it needs to be aligned.
+The C++ ONNX Runtime headers in the image are at version 1.17.1 while the Python runtime is at 1.22.0. That gap is a latent issue for any exercise that calls into the C++ API and needs to be aligned.
 
-On the tooling side, the GitHub Actions workflow (`generate_Robotics_Academy.yml`) does not currently have a GPU testing gate. Adding a self-hosted GPU runner step would give a permanent regression signal for the CUDA execution path instead of relying on manual verification.
+A full exercise test run is still needed on the patched `Dockerfile.dependencies_humble` to confirm no regressions before the PR can merge.
 
-Finally, some student exercises write `import torch` directly in their solutions. Those will now hit `ModuleNotFoundError`. The cleanest fix is a conditional Docker build argument that gates a CPU-only PyTorch variant (~170 MB instead of 4.79 GB) for exercises that need it, without re-introducing the full GPU bloat into the main image.
-
-Next week: OMPL. The 34-minute compile and 2.4 GB layer is the next major target.
+Next week: pin the remaining CUDA wheel versions, complete exercise testing on `Dockerfile.dependencies_humble`, and begin the multi-stage build split.
 
 *Part of my GSoC 2026 work with JdeRobot. Project tracked at [github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid](https://github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid).*

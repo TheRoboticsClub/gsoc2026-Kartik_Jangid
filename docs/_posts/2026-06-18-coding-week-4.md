@@ -293,6 +293,268 @@ The build-only list above is the set of packages that are candidates to vanish f
 
 ---
 
+## Step 5 — ldd and Dynamic Linker Audit
+
+`ldd` reads the ELF headers of a compiled binary or shared library and prints every shared object it must find at runtime. Running it against the key binaries inside the existing monolithic image converts the Category C ambiguities from Step 4 — packages marked as "needs a `.so` but unclear which" — into confirmed package names. What `ldd` cannot see is files opened at runtime via `open()` rather than linked at load time: configuration files, plugin directories, model paths. That is Step 6's job.
+
+All commands were run as:
+```bash
+docker run --rm --entrypoint bash jderobot/robotics-academy:test -c "ldd <path>"
+```
+
+### Definitive Resolutions
+
+**`postgresql-18` — drop entirely, replace with `libpq5`.**
+Two independent paths confirmed this. First: `ldd` on psycopg2's C extension (`psycopg2/_psycopg.cpython-310.so`) showed it links against `/lib/x86_64-linux-gnu/libpq.so.5`. `dpkg -S` confirmed that file is owned by the standalone `libpq5` package — not `postgresql-18`. Second: the cv_bridge chain (described below) also resolves to `libpq.so.5` through a completely separate route. The full PostgreSQL server (`postgresql-18`), its client tools, and all `postgresql-*` meta-packages are dead weight in the RADI container. Only `libpq5` is needed.
+
+**`libboost-all-dev` → two packages only.**
+`ldd /usr/local/lib/libompl.so.18` showed exactly two Boost runtime libraries:
+```
+libboost_filesystem.so.1.74.0    → /lib/x86_64-linux-gnu/libboost_filesystem.so.1.74.0
+libboost_serialization.so.1.74.0 → /lib/x86_64-linux-gnu/libboost_serialization.so.1.74.0
+```
+`libboost-all-dev` is a meta-package that pulls in over 80 packages. The runtime stage needs exactly `libboost-filesystem1.74.0` and `libboost-serialization1.74.0`.
+
+**`libfcl-dev` → `libfcl0.7`.**
+Both `move_group` and `libmoveit_move_group_default_capabilities.so` showed `libfcl.so.0.7 → /lib/x86_64-linux-gnu/libfcl.so.0.7`. The `-dev` headers are not linked by any runtime binary.
+
+**`sudo`, `net-tools`, `tmux`, `tmuxinator`, `libimage-exiftool-perl` — all drop.**
+None of these produced a match across startup scripts, exercise launchers, and HAL files:
+- `grep -r "sudo"` across exercise and academy Python returned only README files (host setup docs, not container code).
+- `grep -rE "ifconfig|netstat|arp"` across all Python returned zero matches.
+- All aerostack2 `.yml`/`.yaml` launcher files were checked — no exercise invokes `tmuxinator start` or calls `tmux` directly.
+- The only mention of `exiftool` in the codebase is a comment in a React `node_modules` TypeScript declaration — not a call.
+
+**All `-dev` packages confirmed replaceable.** The `dpkg -l` audit inside the container showed that every `-dev` package listed in Step 4's swap table already has its non-dev runtime counterpart installed as a transitive dependency. The runtime stage can install the non-dev versions directly:
+
+| Drop from runtime | Install instead |
+|---|---|
+| `libgeographic-dev` | `libgeographic19` |
+| `libncurses-dev` | `libncurses6`, `libncursesw6` |
+| `libyaml-cpp-dev` | `libyaml-cpp0.7` |
+| `libpoco-dev` | `libpocofoundation80 libpocoutil80 libpoconet80 libpocoxml80 libpocojson80` |
+| `libpcl-dev` | `libpcl-common1.12 libpcl-io1.12 libpcl-filters1.12 libpcl-search1.12 libpcl-kdtree1.12` |
+| `libboost-all-dev` | `libboost-filesystem1.74.0 libboost-serialization1.74.0` |
+| `libfcl-dev` | `libfcl0.7` |
+| `libgstreamer-plugins-base1.0-dev` | `libgstreamer-plugins-base1.0-0` |
+
+### Surprise Finding — libgdal30
+
+`ldd /opt/ros/humble/lib/libcv_bridge.so` produced an unexpected chain:
+
+```
+libopencv_imgcodecs.so.4.5d → system OpenCV (apt, compiled against Ubuntu 22.04 libs)
+libgdal.so.30               → /lib/libgdal.so.30     ← not in any Dockerfile apt install
+libpq.so.5                  → /lib/x86_64-linux-gnu/libpq.so.5
+```
+
+`ros-humble-cv-bridge` was compiled against the Ubuntu 22.04 system OpenCV (4.5d). That system OpenCV's image codec support links against GDAL — the Geospatial Data Abstraction Library — which in turn has PostgreSQL raster support compiled in and links against `libpq.so.5`. None of this is visible from reading the Dockerfiles or the Python source.
+
+The owning package is `libgdal30`, installed as a transitive dependency of `ros-humble-cv-bridge`. It is not explicitly mentioned anywhere in the Dockerfiles and would not appear on a manual audit of apt install blocks. Without the `ldd` step, the runtime stage could have been built without GDAL, and any exercise using `cv_bridge` would have failed at the dynamic linker stage with a missing `libgdal.so.30` — the kind of error that is easy to misdiagnose. Because `libgdal30` is a transitive dependency of `ros-humble-cv-bridge`, it will auto-install in the runtime stage as long as cv_bridge is included. The explicit knowledge is what matters: it must appear in the confirmed runtime package list.
+
+The same audit also surfaced a dual OpenCV situation: the container has `libopencv_core.so.4.5d` (system apt, used by cv_bridge) and `opencv-python==4.5.5.64` (pip, used by Python HAL `import cv2`). Both are needed and cannot be consolidated — cv_bridge cannot be relinked against the pip version. No action required, but it explains the GDAL chain.
+
+### Open Questions Remaining After ldd
+
+1. **`libpoco-dev` exact subset** — Poco was not found in `ldd` output for rclcpp, class_loader, or controller_manager. The exact Poco `.so` files needed depend on which ROS 2 packages have Poco compiled in; needs `ldd` on the Poco-consuming binaries specifically.
+2. **`libpcl-dev` exact subset** — The minimal `libpcl-*1.12` set for `ros-humble-pcl-ros` needs `ldd /opt/ros/humble/lib/libpcl_ros_tf.so` (or equivalent) in the runtime stage to confirm.
+3. **`libgdal30` owning package path** — `ldd` resolved `libgdal.so.30` at `/lib/libgdal.so.30` (not the standard `/lib/x86_64-linux-gnu/` path). Needs `dpkg -S /lib/libgdal.so.30` to confirm the owning package name for the explicit runtime apt install list.
+4. **`PySimpleGUI-4-foss`** — Still unresolved. No aerostack2 launcher file was found calling it; if drone exercises run headlessly this package is unused. Default: include it, flag for human confirmation.
+5. **`libassimp5`** — Seen in the gz_ros2_control `ldd` output; it is a transitive dep of `gz-harmonic` and will auto-install. No explicit install needed, but needs confirmation once the runtime stage Dockerfile is written.
+6. **OMPL Boost Python bindings** — `ldd /usr/local/lib/libompl.so.18` did not show `libboost_python`, suggesting the Python bindings live in a separate `.so`. If no exercise does `import ompl` directly (all OMPL access goes through MoveIt's C++ planners), `libboost-python1.74.0` is not needed at runtime.
+
+### Open Questions Resolved
+
+**Q1 — Poco: drop everything.**
+A scan across 500+ ROS `.so` files, all three custom workspaces, MoveIt, and Gazebo found zero Poco linkage:
+```bash
+find /opt/ros/humble/lib -name '*.so' | xargs -I{} sh -c \
+  'ldd "{}" 2>/dev/null | grep -qi PocoFoundation && echo "{}"'
+# (empty)
+```
+`apt-cache rdepends --installed libpocofoundation80` listed only other Poco packages and `libpoco-dev` itself. No installed runtime package depends on Poco. All five `libpoco*80` packages proposed in Step 5 are dropped. `libpoco-dev` was a build-only header install that left no runtime `.so` consumers.
+
+**Q2 — PCL: `libpcl-common1.12` and `libpcl-io1.12` only.**
+`ros-humble-pcl-ros` ships exactly one system-PCL-linked library. `ldd` on it revealed:
+```bash
+ldd /opt/ros/humble/lib/libpcd_to_pointcloud_lib.so | grep 'libpcl_'
+# libpcl_io.so.1.12       → /lib/x86_64-linux-gnu/libpcl_io.so.1.12
+# libpcl_common.so.1.12   → /lib/x86_64-linux-gnu/libpcl_common.so.1.12
+# libpcl_io_ply.so.1.12   → /lib/x86_64-linux-gnu/libpcl_io_ply.so.1.12
+```
+All three `.so` files are owned by `libpcl-io1.12` and `libpcl-common1.12`. `filters`, `search`, `kdtree`, and `octree` did not appear in any ldd output. `ros-humble-pcl-conversions` is a header-only bridge and installs no system-PCL-linked `.so`. Install the confirmed minimum; the broader set gets added only if a missing-lib error is observed at runtime.
+
+**Q3 — `libgdal30`: auto-installed, remove from explicit list.**
+```bash
+dpkg -S /lib/libgdal.so.30
+# libgdal30: /usr/lib/libgdal.so.30
+```
+`libgdal30` is already a transitive dependency of `ros-humble-cv-bridge` → system OpenCV. It auto-installs in the runtime stage when cv_bridge is included. No explicit listing needed.
+
+**Q4 — `PySimpleGUI-4-foss`: drop.**
+```bash
+grep -r 'PySimpleGUI\|pysimplegui' \
+  /RoboticsAcademy/exercises/ /RoboticsInfrastructure/ /RoboticsAcademy/academy/
+# (empty)
+```
+Zero matches across all exercise, academy, and infrastructure code. Drop from the runtime stage.
+
+**Q5 — `libassimp5`: confirmed transitive, no action needed.**
+`libassimp.so.5` is a transitive dependency of `gz-harmonic`. It auto-installs when `gz-harmonic` is included. No explicit listing required.
+
+**Q6 — OMPL Boost Python: `libboost-python1.74.0` and `libboost-numpy1.74.0` both required.**
+Step 5 ran `ldd` on `libompl.so.18` (the C++ library) and saw no Boost Python — the Python bindings are separate `.so` files that Step 5 missed entirely:
+```bash
+for f in /usr/lib/python3/dist-packages/ompl/base/_base.so \
+          /usr/lib/python3/dist-packages/ompl/geometric/_geometric.so \
+          /usr/lib/python3/dist-packages/ompl/control/_control.so; do
+  ldd "$f" | grep -i boost
+done
+# all three: libboost_python310.so.1.74.0
+# _base.so additionally: libboost_numpy310.so.1.74.0
+```
+`dpkg -S libboost_python310.so.1.74.0` confirmed: the unversioned symlink is owned by `libboost-python1.74-dev`; the versioned `.so.1.74.0` is owned by `libboost-python1.74.0`. The runtime stage needs the non-dev package. Both `libboost-python1.74.0` and `libboost-numpy1.74.0` are required.
+
+### Final Confirmed Runtime apt Additions from Steps 5 and 6
+
+Every entry below has at least one `ldd` or `dpkg` confirmation trace:
+
+| Package | Evidence |
+|---|---|
+| `libpq5` | psycopg2 `ldd` + cv_bridge → libgdal → libpq chain |
+| `libfcl0.7` | MoveIt `move_group` ldd |
+| `libboost-filesystem1.74.0` | OMPL `libompl.so.18` ldd |
+| `libboost-serialization1.74.0` | OMPL `libompl.so.18` ldd |
+| `libboost-python1.74.0` | OMPL Python extension ldd (all three modules) |
+| `libboost-numpy1.74.0` | OMPL `_base.so` ldd |
+| `libpcl-common1.12` | `libpcd_to_pointcloud_lib.so` ldd |
+| `libpcl-io1.12` | `libpcd_to_pointcloud_lib.so` ldd |
+| `libgeographic19` | dpkg split from `libgeographic-dev` |
+| `libncurses6`, `libncursesw6` | dpkg split from `libncurses-dev` |
+| `libyaml-cpp0.7` | dpkg split from `libyaml-cpp-dev` |
+| `libgstreamer-plugins-base1.0-0` | replaces `-dev` variant |
+| `pciutils` | `set_dri_name.sh` calls `lspci` (grep confirmed) |
+| `python3-pip` | `check_ram_version.sh` calls `pip` at startup (grep confirmed) |
+
+Confirmed not needed in the runtime stage: all five `libpoco*80` packages, `libgdal30` (transitive), `libassimp5` (transitive), `PySimpleGUI-4-foss`, `postgresql-18` and all `postgresql-*` meta-packages, and the four unconfirmed PCL sub-packages (`filters`, `search`, `kdtree`, `octree`).
+
+---
+
+## Step 6 — strace Open-File Audit
+
+`ldd` maps shared library linkage at load time; it sees nothing that a process opens via `open()` or `openat()` at runtime — config files, ament resource index markers, launch scripts, URDF and SDF models, parameter YAML files. Without auditing these, the runtime stage could have the right `.so` files and still crash the moment it tries to read a file that was only present in the builder. All four `strace --cap-add SYS_PTRACE` invocations returned empty output due to Docker 20.10's kernel-level seccomp profile blocking `ptrace(PTRACE_ATTACH)` even with the capability granted. The audit fell back to `bash -x` tracing of `source /.env` and direct directory inspection of every path in the startup chain.
+
+### Critical Finding — Symlink-Install Bomb
+
+Both colcon workspaces were built with `--symlink-install`:
+
+```dockerfile
+# Dockerfile.dependencies_humble
+RUN colcon build --symlink-install ...   # /home/drones_ws
+
+# Dockerfile.humble
+RUN colcon build --symlink-install ...   # /home/ws
+```
+
+`--symlink-install` means that every Python script, launch file, YAML parameter file, URDF, XACRO, and SDF in `install/` is a symbolic link pointing back into `src/`. Confirmed inside the container:
+
+```
+lrwxrwxrwx root root  48 Jun 11  f1.launch.py -> /home/ws/src/CustomRobots/f1/launch/f1.launch.py
+lrwxrwxrwx root root 106 Jun 11  controller_moveit2.yaml -> /home/ws/src/Industrial/.../config/controller_moveit2.yaml
+```
+
+**`COPY --from=builder /home/ws/install /home/ws/install` copies symlinks verbatim.** The targets (`/home/ws/src/`) are never copied to the runtime stage. Every copied symlink becomes a dangling pointer. The runtime image would pass a casual inspection — the `install/` directory is present and all the expected files are listed — and then crash on the first exercise that loads a launch file, reads a YAML parameter, or parses a URDF.
+
+This is the kind of failure that survives code review and only surfaces at runtime, after the multi-stage build appears to succeed.
+
+**Fix:** Remove `--symlink-install` from both `colcon build` commands in the multi-stage Dockerfile. The builder stage compiles from source; the normal (non-symlink) install produces real copies. The runtime stage then gets `install/` with all files intact. The compiled `.so` files in `lib/` are already real files under `--symlink-install` — only the non-binary content is affected. No source code behaviour changes; this is a production-install vs development-install distinction.
+
+### ament Resource Index
+
+ROS 2 nodes discover packages, plugins, and typesupport at startup by reading marker files under `resource_index/`. `/opt/ros/humble/share/ament_index/` is owned by apt and will be present automatically in the runtime stage when the `ros-humble-*` packages are installed. The two workspace ament_index directories (`/home/drones_ws/install/share/ament_index/` and `/home/ws/install/share/ament_index/`) are colcon build artifacts and are covered by the `install/` COPY once `--symlink-install` is removed.
+
+### Gazebo Resource Paths
+
+Four of the eight paths in `GAZEBO_RESOURCE_PATH`, `GAZEBO_MODEL_PATH`, and `GZ_SIM_RESOURCE_PATH` are apt-owned and auto-present. The remaining four are build artifacts:
+
+| Path | Origin | Action |
+|---|---|---|
+| `/usr/share/gazebo-11` and subdirs | `gazebo11` apt | None — auto-present |
+| `/usr/lib/x86_64-linux-gnu/gazebo-11/plugins` | `gazebo11` apt | None — auto-present |
+| `/opt/jderobot/Worlds` | `git clone RoboticsInfrastructure` in builder | **COPY from builder** |
+| `/home/ws/install/custom_robots/share/` | colcon build | Covered by `install/` COPY |
+| `/home/drones_ws/install/as2_gazebo_assets/share/` | colcon build | Covered by `install/` COPY |
+| `/home/drones_ws/install/as2_gazebo_assets/lib/` | colcon build (Gazebo system plugins) | Covered by `install/` COPY |
+
+`/opt/jderobot/Worlds` is the only Gazebo resource path that requires its own explicit `COPY` line — it comes from the `RoboticsInfrastructure` git clone and sits outside any colcon workspace.
+
+### Dead Paths (ENOENT)
+
+Two paths in `/.env` are sourced or exported at every container start but do not exist in the image:
+
+| Path | Referenced in | Guard | Recommendation |
+|---|---|---|---|
+| `/workspace/worlds/install/setup.bash` | `/.env` line 7 | `&>/dev/null` | Remove from `/.env` — dead volume-mount scaffolding |
+| `/workspace/code/libs` | `/.env` LD_LIBRARY_PATH | none | Remove from `/.env` — no `.so` files to search |
+
+This is the same pattern as the `/home/dev_ws/install/local_setup.bash` dead reference found in Step 1. All three are accumulated cruft in `/.env` from workspace layouts that no longer exist. The refactor is the right time to remove them — they add noise to every bash subshell startup and would make the ENOENT behaviour permanent in the runtime stage.
+
+### Complete COPY --from=builder List
+
+Every path that must cross the stage boundary. Paths not listed here are either reinstalled from apt or re-created by a `RUN` command in the runtime stage.
+
+```dockerfile
+# Prerequisite: both colcon builds must omit --symlink-install
+COPY --from=builder /home/drones_ws/install/   /home/drones_ws/install/
+COPY --from=builder /home/ws/install/          /home/ws/install/
+
+# RoboticsInfrastructure artifacts — outside any colcon workspace
+COPY --from=builder /opt/jderobot/Launchers    /opt/jderobot/Launchers
+COPY --from=builder /opt/jderobot/Worlds       /opt/jderobot/Worlds
+COPY --from=builder /resources                 /resources
+
+# RoboticsAcademy (Django + exercise code)
+COPY --from=builder /RoboticsAcademy           /RoboticsAcademy
+
+# Startup scripts (mv'd from RoboticsInfrastructure/scripts/ in builder)
+COPY --from=builder /entrypoint.sh             /entrypoint.sh
+COPY --from=builder /.env                      /.env
+COPY --from=builder /ram_entrypoint.py         /ram_entrypoint.py
+COPY --from=builder /start_vnc.sh              /start_vnc.sh
+COPY --from=builder /start_vnc_gpu.sh          /start_vnc_gpu.sh
+COPY --from=builder /kill_all.sh               /kill_all.sh
+COPY --from=builder /set_dri_name.sh           /set_dri_name.sh
+COPY --from=builder /check_ram_version.sh      /check_ram_version.sh
+COPY --from=builder /check_device.py           /check_device.py
+
+# Config files (not apt-owned; downloaded or mv'd during build)
+COPY --from=builder /xorg.conf                                   /xorg.conf
+COPY --from=builder /etc/xdg/openbox/LXDE/rc.xml                /etc/xdg/openbox/LXDE/rc.xml
+COPY --from=builder /etc/ld.so.conf.d/nvidia-pip.conf           /etc/ld.so.conf.d/nvidia-pip.conf
+
+# OMPL (built from source by install-ompl-ubuntu.sh)
+COPY --from=builder /usr/local/lib/libompl.so.1.7.0             /usr/local/lib/libompl.so.1.7.0
+COPY --from=builder /usr/local/lib/libompl.so.18                /usr/local/lib/libompl.so.18
+COPY --from=builder /usr/local/lib/libompl.so                   /usr/local/lib/libompl.so
+COPY --from=builder /usr/lib/python3/dist-packages/ompl/        /usr/lib/python3/dist-packages/ompl/
+
+# ONNX Runtime C++ (installed by wget + tar in builder)
+COPY --from=builder /usr/local/lib/libonnxruntime.so.1.22.0             /usr/local/lib/
+COPY --from=builder /usr/local/lib/libonnxruntime.so.1                  /usr/local/lib/
+COPY --from=builder /usr/local/lib/libonnxruntime.so                    /usr/local/lib/
+COPY --from=builder /usr/local/lib/libonnxruntime_providers_shared.so   /usr/local/lib/
+
+# noVNC (git clone in builder)
+COPY --from=builder /noVNC                     /noVNC
+
+# Trivial files re-created in runtime stage (no COPY needed)
+RUN mkdir -p /root/.gazebo && touch /root/.gazebo/gui.ini \
+ && mkdir -p /root/.roboticsacademy/log \
+ && ldconfig
+```
+
+---
+
 *More steps to follow as the audit progresses.*
 
 *Part of my GSoC 2026 work with JdeRobot. Project tracked at [github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid](https://github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid).*

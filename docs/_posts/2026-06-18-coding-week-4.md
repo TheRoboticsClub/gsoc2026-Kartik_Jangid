@@ -8,22 +8,18 @@ tags: [docker, gsoc2026, jderobot, optimization, multi-stage-build, entrypoint, 
 
 ## Week 4 — Pre-Refactoring Audit
 
-Before writing a single line of the multi-stage Dockerfile, I ran a structured read-only audit of the existing image across six steps.
+Before touching the Dockerfile, I spent this week doing a read-only audit of the existing RADI image. The goal was to understand exactly what the current build produces before splitting it — the kind of thing where if you skip it, you spend two days debugging a runtime image that looks right but isn't.
 
-**What I found that matters:**
+A few things came up that directly affect how the multi-stage split needs to work.
 
-- `NVIDIA_VISIBLE_DEVICES` is declared as `ARG` not `ENV` in `Dockerfile.dependencies_humble`. The NVIDIA container runtime reads this from the running container's environment — an `ARG` does not persist into the image, so GPU access is silently unavailable regardless of `--gpus` flags passed at runtime.
+The GPU issue is a correctness bug: `NVIDIA_VISIBLE_DEVICES` is declared as `ARG` in `Dockerfile.dependencies_humble`, not `ENV`. The NVIDIA container runtime reads this variable from the running container's environment — an `ARG` exists only during the build and doesn't persist into the image. So even with `--gpus all` at runtime, the container never sees it. This needs to be fixed in the runtime stage.
 
-- `/.env` unconditionally sources `/home/dev_ws/install/local_setup.bash`, a workspace no Dockerfile ever builds. Every bash subshell startup prints a silent `No such file or directory` error; this path and two others (`/workspace/worlds/install/setup.bash`, `/workspace/code/libs`) are accumulated cruft to remove in the refactor.
+Before the first build from the new Dockerfile, I also need to add a `.dockerignore` at the repo root. There isn't one. The current build is safe only because `build.sh` points Docker at a 41 MB subdirectory as its context — but once the multi-stage Dockerfile lives at the repo root, running `docker build .` without `.dockerignore` sends 6.6 GB to the daemon: `.git/` alone is 2.3 GB.
 
-- There is no `.dockerignore` anywhere in the repository. The current build is safe only because `build.sh` uses `scripts/RADI/` (41 MB) as context. Running `docker build` from the repo root without one sends 6.6 GB to the daemon — `.git/` is 2.3 GB, `RoboticsInfrastructure/` is 3.2 GB, `react_frontend/node_modules/` is 851 MB — all sent, none needed.
+On the package side: the full `postgresql-18` server is installed in RADI, but the container only ever connects to the database via psycopg2. I ran `ldd` on psycopg2's C extension — it links `libpq.so.5`, which belongs to the standalone `libpq5` package. The full server, client tools, and all the `postgresql-*` meta-packages are dead weight in the runtime stage, and swapping them out is a meaningful size reduction.
 
-- `postgresql-18` (full server) is installed in the RADI container, which only ever connects to the database via psycopg2. `ldd` on psycopg2's C extension confirmed it links `/lib/x86_64-linux-gnu/libpq.so.5`, owned by the standalone `libpq5` package. The server, its client tools, and all `postgresql-*` meta-packages are dead weight.
+The other thing that would silently break the runtime image: both colcon workspaces were built with `--symlink-install`. In that mode, every launch file, YAML, and Python script in `install/` is a symlink back into `src/`. A `COPY --from=builder` of the install directory copies those symlinks verbatim — `src/` never comes across — so the runtime image ends up with thousands of dangling pointers. I need to drop `--symlink-install` from both colcon builds in the builder stage.
 
-- Both colcon workspaces were built with `--symlink-install`. Every launch file, YAML, URDF, and Python script in `install/` is a symlink back into `src/`. A `COPY --from=builder /home/ws/install /home/ws/install` copies the symlinks verbatim — `src/` is never copied — leaving thousands of dangling pointers in a runtime image that looks correct but crashes on the first exercise load.
-
-- Poco libraries have zero runtime linkage across 500+ `.so` files in the ROS humble installation, all three custom workspaces, MoveIt, and Gazebo. `apt-cache rdepends --installed libpocofoundation80` showed only other Poco packages as dependents. All five `libpoco*80` packages are dropped from the runtime stage entirely.
-
-**Next:** Steps 7 and 8 (cache wall mapping, user and permissions audit), then the Dockerfile.
+Still working through the remaining audit steps before writing the Dockerfile.
 
 *Part of my GSoC 2026 work with JdeRobot. Project tracked at [github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid](https://github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid).*

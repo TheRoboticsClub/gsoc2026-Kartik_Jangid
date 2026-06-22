@@ -34,7 +34,7 @@ Javier confirmed in the Thursday meeting that the flag has to stay. The Robotics
 '/bin/bash -c "cd /workspace/worlds; source /opt/ros/humble/setup.bash; colcon build --symlink-install; source install/setup.bash; cd ../.."'
 ```
 
-Removing the flag from the image build would create a mismatch between the pre-built install trees and what the manager builds at runtime. So the multi-stage design has to carry `src/` directories into the runtime stage alongside `install/`. That's the constraint to design around, not a flag to remove. `/workspace/worlds` itself doesn't exist in the image — the manager creates and destroys it at runtime for each exercise load — so there's nothing to account for in the Dockerfile on that front.
+The mentor confirmed the flag stays. The runtime build the manager runs in `/workspace/worlds/` follows the same pattern, which is why the flag is consistent across both. So the multi-stage design has to carry `src/` directories into the runtime stage alongside `install/`. That's the constraint to design around, not a flag to remove. `/workspace/worlds` itself doesn't exist in the image — the manager creates and destroys it at runtime for each exercise load — so there's nothing to account for in the Dockerfile on that front.
 
 
 ## The Dead Source Line and Why It Doesn't Break Anything
@@ -76,6 +76,6 @@ Running `objdump -p` on `libdrone_lib_cpp.so` confirmed no RPATH is baked into t
 
 The audit is still ongoing. Some things need more reading before I can be confident in the multi-stage split design, and the Thursday meeting actually added a few items to check rather than only removing them. That's fine. David's point about building on a solid foundation applies here: it's better to spend another few days on the audit than to start writing a Dockerfile based on assumptions that turn out to be wrong.
 
-If you're following the project or want to weigh in on anything above, the Slack channel is the right place. I check it daily.
+<!-- If you're following the project or want to weigh in on anything above, the Slack channel is the right place. I check it daily. -->
 
 *Part of my GSoC 2026 work with JdeRobot. Project tracked at [github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid](https://github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid).*

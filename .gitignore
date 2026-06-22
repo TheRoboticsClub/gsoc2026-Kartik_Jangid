@@ -6,3 +6,4 @@ docs/Gemfile.lock
 docs/node_modules/
 docs/vendor/bundle/
 gsoc2025-Javier_Izquierdo/
+.claude/*

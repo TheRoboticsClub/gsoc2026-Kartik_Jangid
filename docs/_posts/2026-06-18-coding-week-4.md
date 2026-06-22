@@ -19,22 +19,20 @@ ARG NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=all
 ```
 
-`NVIDIA_DRIVER_CAPABILITIES` is `ENV`, so it persists into the running container. `NVIDIA_VISIBLE_DEVICES` is `ARG`, which only exists during the build and is gone by runtime. The NVIDIA container runtime reads both from the container's live environment to decide which GPUs to expose and what capabilities to enable. With `NVIDIA_VISIBLE_DEVICES` as `ARG`, there's nothing on the devices side for it to read.
-
-In practice, passing `--gpus all` at `docker run` makes the NVIDIA toolkit inject `NVIDIA_VISIBLE_DEVICES=all` automatically, so nothing silently breaks today. But that's the toolkit bailing you out, not the Dockerfile being correct. Declaring it as `ENV` is NVIDIA's own recommended pattern and removes the dependency on that implicit injection. The fix goes in the runtime stage of the multi-stage build.
+`NVIDIA_DRIVER_CAPABILITIES` is `ENV` so it persists. `NVIDIA_VISIBLE_DEVICES` is `ARG` — gone after the build, not present in the running container. Passing `--gpus all` at runtime compensates today via automatic toolkit injection, but the correct fix is `ENV`. It goes in the runtime stage.
 
 
-## --symlink-install Is Not a Bug
+## --symlink-install: The Constraint and What It Costs
 
-Lines 364-375 of `Dockerfile.dependencies_humble` are a single `RUN` instruction with an if/else on `$TARGETARCH`. Both the `arm64` branch and the non-`arm64` branch call `colcon` with `--symlink-install`, but only one branch runs per build. The main workspace build in `Dockerfile.humble` at line 41 also uses the flag. I initially wanted to drop it for the multi-stage build because `COPY --from=builder` copies symlinks verbatim without the `src/` trees they point into, which would leave the runtime stage full of dangling pointers.
+The mentor confirmed `--symlink-install` has to stay, so the question became what it actually produces and what that means for copying artifacts into a runtime stage. The assumption going into verification was that it creates `.pth` editable installs for Python packages, meaning only a handful of small `src/` directories would need to travel with `install/`.
 
-Javier confirmed in the Thursday meeting that the flag has to stay. The RoboticsApplicationManager runs its own `colcon build --symlink-install` at runtime when loading a universe (manager.py line 403):
+That assumption was wrong. Running `find` inside both images found zero `.pth` files. What `--symlink-install` actually creates is filesystem symlinks — 3,206 of them from `/home/ws/install/` back into `/home/ws/src/` across 21 packages, and 347 from `/home/drones_ws/install/` back into `/home/drones_ws/src/`. Copying `install/` alone into a runtime stage leaves all of those dangling. The "copy 268K of Python source" framing from the earlier audit was incorrect and is withdrawn.
 
-```
-'/bin/bash -c "cd /workspace/worlds; source /opt/ros/humble/setup.bash; colcon build --symlink-install; source install/setup.bash; cd ../.."'
-```
+What this means for the split is that `src/` cannot be excluded wholesale. The question is which subset of `src/` the symlink graph actually requires at runtime — not all of `/home/ws/src/` (2.5G) needs to ship, but the exact minimal set has to be traced from the symlinks rather than assumed. That tracing is the open question going to Slack before implementation starts.
 
-The mentor confirmed the flag stays. The runtime build the manager runs in `/workspace/worlds/` follows the same pattern, which is why the flag is consistent across both. So the multi-stage design has to carry `src/` directories into the runtime stage alongside `install/`. That's the constraint to design around, not a flag to remove. `/workspace/worlds` itself doesn't exist in the image — the manager creates and destroys it at runtime for each exercise load — so there's nothing to account for in the Dockerfile on that front.
+Two things the verification did close: `AEROSTACK2_PATH` appears only in the Dockerfile's export line and has no runtime reader — so `/home/drones_ws/src/aerostack2` is not needed for that reason. The MoveIt and OMPL packages used by Industrial exercises are present in the inherited ROS install — no special COPY and no patched headers needed.
+
+One correction from the package audit stands: `colcon` must be in the runtime stage because `manager.py` line 403 runs `colcon build --symlink-install` at runtime when loading a custom universe. Running `objdump -p` on `libdrone_lib_cpp.so` confirmed no RPATH is baked in — resolution is through `LD_LIBRARY_PATH` from sourcing `/home/drones_ws/install/setup.bash`, so that directory must be present in the runtime stage.
 
 
 ## The Dead Source Line and Why It Doesn't Break Anything
@@ -49,9 +47,9 @@ RUN /bin/bash -c "source /opt/ros/humble/setup.bash; colcon build --symlink-inst
 
 Docker starts a new shell for each `RUN` instruction. The shell on line 40 exits when it finishes, so the sourced environment is gone before line 41 starts. The source call on line 40 does nothing useful. I flagged this on Slack before touching the file.
 
-The git history resolved it. Commit `ae1967950` from May 11 2026 had already fixed this by collapsing the source and the build into a single `RUN`. Commit `79b9ef589` two days later reverted it — not because the fix was wrong, but because the PR was scoped to something unrelated to Dockerfiles and the mentor asked for a clean revert. The fix was correct and came back out for process reasons only.
+Someone had already fixed this in git by collapsing the source and the build into a single `RUN`. It was reverted for process reasons — the PR was scoped to something unrelated, mentor asked for a clean revert — not because the fix was wrong.
 
-What I didn't understand until the mentor explained it is why line 40 doesn't cause a build failure. `Dockerfile.dependencies_humble` at lines 382 and 385 appends both source commands into `~/.bashrc`, and `Dockerfile.humble` at line 65 sets `ENV BASH_ENV=/.env`. `BASH_ENV` tells bash to source that file at startup for every non-interactive shell — including every `RUN /bin/bash -c` instruction — so `drones_ws` is already in the environment before line 40 even runs. Line 40 is sourcing something that's already there. The source instructions in `Dockerfile.humble` are not needed because `Dockerfile.dependencies_humble` already handles them through `BASH_ENV`. Line 40 can go, and the runtime stage will inherit `ENV BASH_ENV=/.env` from the base image automatically — no extra wiring needed.
+What I didn't understand until the mentor explained it is why line 40 doesn't cause a build failure. `Dockerfile.dependencies_humble` at lines 382 and 385 appends both source commands into `~/.bashrc`, and `Dockerfile.humble` at line 65 sets `ENV BASH_ENV=/.env`. `BASH_ENV` tells bash to source that file at startup for every non-interactive shell — including every `RUN /bin/bash -c` instruction — so `drones_ws` is already in the environment before line 40 even runs. Line 40 is sourcing something that's already there. The source instructions in `Dockerfile.humble` are not needed because `Dockerfile.dependencies_humble` already handles them through `BASH_ENV`.
 
 
 ## What the Runtime Stage Actually Needs
@@ -63,19 +61,8 @@ Three packages looked like dev tools but turned out to be runtime. `manager.py` 
 The shared library situation needed a different tool. I ran `dpkg -S` inside the `dependencies-humble` container against `libGeographic.so`, `libPocoFoundation.so`, `libpcl_common.so`, `libncurses.so`, and `libyaml-cpp.so` and got the same pattern every time. The unversioned `.so` symlink belongs to the `-dev` package — that's what the linker follows at compile time. The versioned `.so` belongs to a separate runtime package and is what the dynamic linker actually loads when the container runs. The runtime stage therefore needs `libgeographic19`, `libpocofoundation80`, `libpcl-common1.12`, `libncurses6`, and `libyaml-cpp0.7`, not the `-dev` packages.
 
 
-## What --symlink-install Means for the Split
-
-The mentor confirmed `--symlink-install` has to stay, so the question was never whether to keep it but what it actually means for copying artifacts into a runtime stage. The audit found the flag only affects `ament_python` packages. For those, `colcon` calls `pip install --editable` instead of a normal install, landing a `.pth` file in `install/` that points back to the source directory in `src/`. C++ packages are unaffected — CMake physically copies compiled `.so` files into `install/` regardless of the flag. `COPY --from=builder` of `install/` works cleanly for all C++ artifacts. It breaks only for Python packages because the `.pth` paths dangle as soon as `src/` is absent.
-
-Four packages in `/home/ws/` are `ament_python`: `jderobot_drones` (116K), `tello_camera` (56K), `tello_simple_teleop` (44K), and `platform_controller` (52K). Their combined `src/` is 268K against a total `/home/ws/src/` of 2.5G. The runtime stage needs `install/` (72M) plus those 268K of Python source — the remaining 2.5G stays in the builder only. One classification from the earlier package audit needed a correction here: `python3-colcon-common-extensions` is not build-time only. `manager.py` line 403 runs `colcon build --symlink-install` at runtime when the `RoboticsApplicationManager` loads a custom universe into `/workspace/worlds/`. `colcon` must be present in the runtime stage.
-
-Running `objdump -p` on `libdrone_lib_cpp.so` confirmed no RPATH is baked into the binary. It resolves `aerostack2` dependencies at runtime through `LD_LIBRARY_PATH`, set by sourcing `/home/drones_ws/install/setup.bash`. The runtime stage needs `/home/drones_ws/install/` present and the `BASH_ENV=/.env` mechanism to carry forward — but no path fixup is needed. The `/home/dev_ws/install` reference in `jderobot_drones_cpp/CMakeLists.txt` at line 11 is a build-time hint that left no trace in the compiled output. That question is closed.
-
-
 ## What's Next
 
-The audit is still ongoing. Some things need more reading before I can be confident in the multi-stage split design, and the Thursday meeting actually added a few items to check rather than only removing them. That's fine. David's point about building on a solid foundation applies here: it's better to spend another few days on the audit than to start writing a Dockerfile based on assumptions that turn out to be wrong.
-
-<!-- If you're following the project or want to weigh in on anything above, the Slack channel is the right place. I check it daily. -->
+One question goes to Slack before the Dockerfile is written: what is the minimal subset of `src/` the symlink graph requires at runtime, and where does `gz_ros2_control` fit in the two-Dockerfile split. Those two answers determine the COPY instructions for the runtime stage. Everything else the audit needed to know is verified.
 
 *Part of my GSoC 2026 work with JdeRobot. Project tracked at [github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid](https://github.com/TheRoboticsClub/gsoc2026-Kartik_Jangid).*

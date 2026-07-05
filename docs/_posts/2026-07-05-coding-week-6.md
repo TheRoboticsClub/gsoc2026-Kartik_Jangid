@@ -6,7 +6,7 @@ categories: [gsoc, coding-period]
 tags: [docker, gsoc2026, jderobot, optimization, multi-stage-build, ros2]
 ---
 
-The goal this week was to actually build the multi-stage split I designed last week: turn `Dockerfile.dependencies_humble` into two stages, a `deps-builder` and a `deps-final`, without changing how either ROS workspace compiles. No touching colcon invocations, no touching `--symlink-install`.
+The goal this week was to actually build the multi-stage split I designed last week: turn `Dockerfile.dependencies_humble` into two stages, a `deps-builder` and a `deps-final`, without changing how either ROS workspace compiles. No touching colcon invocations, no touching `--symlink-install`. The code for all of this is in [PR #3900](https://github.com/JdeRobot/RoboticsAcademy/pull/3900), if you want to see the actual diff for the stages described below.
 
 I worked in a .multistage copy of the file the entire time, leaving Dockerfile.dependencies_humble itself untouched until the split was fully verified — safer to break a throwaway file fifty times over than the one file everyone else's builds actually depend on.
 

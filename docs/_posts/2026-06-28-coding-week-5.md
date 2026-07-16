@@ -6,7 +6,7 @@ categories: [gsoc, coding-period]
 tags: [docker, gsoc2026, jderobot, optimization, multi-stage-build, nvidia, ros2]
 ---
 
-Semester exams and VIVAs ran through most of the week. David knew going in, and the scope was set accordingly. Two things shipped.
+Semester exams and VIVAs ran through most of the week, so there wasn't much time to work. We only had the Monday meeting — I told David up front that I wouldn't get much done, and we skipped Thursday's. Two things still shipped.
 
 ## The NVIDIA Fix ([PR #3890](https://github.com/JdeRobot/RoboticsAcademy/pull/3890))
 

@@ -10,8 +10,7 @@ This week mostly Focused on learning the podman architectures and whether or not
 
 ## Docker also works via rootless, then why not use it?
 
-According to official Docker docs, it also supports rootless mode, but it needs manual configuration by the end-user — the user needs to execute the rootless setup script.
-
+According to official Docker docs, it also supports rootless mode, but it needs manual configuration by the end-user ,the user needs to execute the rootless setup script
 ```bash
 # it creates a user systemd service and a user socket
 dockerd-rootless-setuptool.sh install
@@ -20,7 +19,7 @@ Then enable and start the user Docker service.In short the user needs to do an a
 
 #### How much difference would there be with Podman instead of Docker?
 
-For most RoboticsAcademy users, **very little changes**. The existing workflows such as building images, running the exercises, using Compose, mounting volumes and exposing ports remain largely the same because both Docker and Podman implement the OCI container standards.
+For most RoboticsAcademy users, very little changes. The existing workflows such as building images, running the exercises, using Compose, mounting volumes and exposing ports remain largely the same because both Docker and Podman implement the OCI container standards.
 
 The differences become noticeable mainly in the following scenarios:
 
@@ -53,9 +52,9 @@ With both sorted, the stack came up clean, database `healthy`, app `Up`.
 
 ### Stale Checkouts Across Three Repos
 
-Getting an exercise to actually load turned into the most confusing part of the week, and none of it was Podman's fault — I just hadn't pulled the latest commits across three different repos, all renamed the same day, July 7th, as part of one coordinated cleanup.
+Getting an exercise to actually load turned into the most confusing part of the week, and none of it was Podman's fault .I just hadn't pulled the latest commits across three different repos, all renamed the same day, July 7th, as part of one coordinated cleanup.
 
-The frontend bundle was still calling `get_universes_list`, renamed to `get_worlds_list` — fixed with `yarn install && yarn run build`. The `RoboticsInfrastructure` submodule had renamed `universes.sql` to `worlds.sql`, breaking a bind mount — a one-line path fix (the same stale reference is still in the tracked compose files under `compose_cfg/` on `humble-devel`). And `src/`, a separate nested clone of `RoboticsApplicationManager` about 35 throwing `KeyError: 'world'` — fixed with a `git pull`.
+The frontend bundle was still calling `get_universes_list`, renamed to `get_worlds_list`, fixed with `yarn install && yarn run build`. The `RoboticsInfrastructure` submodule had renamed `universes.sql` to `worlds.sql`, breaking a bind mount, fixed with a one-line path change (the same stale reference is still in the tracked compose files under `compose_cfg/` on `humble-devel`). And `src/`, a separate nested clone of `RoboticsApplicationManager` about 35 commits behind its upstream, had renamed `world` to `scene` in the frontend-backend message format, throwing `KeyError: 'world'`, fixed with a `git pull`.
 
 Once all three were current, `follow_line` launched end to end, noVNC came up, the simulation loaded, and running the exercise's code got a response from the robot.
 
@@ -65,11 +64,11 @@ Autosave, the save that fires automatically when leaving an exercise's editor, t
 
 ![Error saving file popup with no message, shown while testing autosave on the Follow Line exercise]({{ "/assets/images/week8/Error podman.png" | relative_url }})
 
-The file in question, `filesystem/follow_line/academy.py`, isn't in the repo at all, icommits behind its upstream, had renamed `world` to `scene` in the frontend-backend message format, t's gitignored, a per-student workspace file the app creates and manages at runtime. Its ownership traces to root, and its creation timestamp is from May 29th, seven weeks before this test, with more workspace files created across six other dates since. This machine also runs a genuine rootful Docker daemon alongside Podman, and plain Docker's root inside a container is real host root, no translation. So every time an exercise got opened for the first time over the past seven weeks using regular Docker, that container, as actual root, created these files, and they've stayed root-owned ever since.
+Turned out the save itself worked. The file's new content wrote to disk without a problem. What failed was the step right after it, an attempt to reset the file's permissions back to fully open, and that failure is what surfaced as the error.
 
-Rootless Podman doesn't work that way by design, its container's "root" is just the host user in disguise, not real root. So when the app tried to save under Podman today, the content write itself went through fine, but the very next step, resetting the file's permission bits back to 777 via `chmod`, failed. Changing permission bits needs actual ownership, and disguised-root doesn't qualify. The error code that came back, `EPERM` rather than the more common `EACCES`, is the specific signature of exactly this kind of identity mismatch.
+The reason traces back to how this particular file came to exist. It's a per-student workspace file, `filesystem/follow_line/academy.py`, that RoboticsAcademy creates the first time an exercise gets opened, and this one had been sitting around since May, created weeks earlier while testing with plain rootful Docker, whose containers run as genuine root on the host. Rootless Podman doesn't work that way by design. Its container's "root" is really just the local user wearing a disguise, so it could still write new content into a file it doesn't own, but it couldn't change that file's permission bits, since that specifically requires real ownership. The error code confirmed exactly this: `EPERM`, not the more familiar `EACCES`, the standard signature of an ownership mismatch rather than a plain access problem.
 
-Nothing was lost, the edit itself saved, but the failed permission reset is what surfaces as the error popup.
+Nothing was lost. The edit itself saved, only the permission reset failed, and the popup came back blank because of a separate, preexisting bug where the frontend only reads error text from one field while this class of backend error sends it under another. Unrelated to Podman, and it would hide the same message under regular Docker too.
 
 ### Result
 

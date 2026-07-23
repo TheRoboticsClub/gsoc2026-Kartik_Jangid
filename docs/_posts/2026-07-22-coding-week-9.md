@@ -35,4 +35,4 @@ I also hit a PATH issue inside `podman-compose`, where it was resolving the wron
 Right now the compose_cfg contains 8 compose files which are mostly identical-every combination of {user, dev} × {cpu, gpu, nvidia, nvidia-windows}.One change needs to be replicated in all other files. I can put base code into one file and put the actual difference(GPU bits) into small override fragments I layer on top.base + nvidia-override, base + intel-override, base + nothing for CPU.
 
 ## Conclusion
-The blocker is understood and has a chosen fix (upgrading podman). The path forward is CDI-based GPU passthrough run through Python `podman-compose`, with keep-id and keep-groups handling rootless identity.
+The path forward is CDI-based GPU passthrough run through Python `podman-compose`, with keep-id and keep-groups handling rootless identity.

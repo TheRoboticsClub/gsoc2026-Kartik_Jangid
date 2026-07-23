@@ -21,7 +21,7 @@ This one was my own mistake, I hadn't kept podman updated. When two tools that s
 
 It's not only my mistake though. Ubuntu 24.04 ships podman 4.9.3 in its repositories and that's the ceiling, so a plain `apt upgrade` won't move past it. Any student following the default install path on Ubuntu 24.04 would hit this exact wall, which makes updating podman a real prerequisite for the project and not just something I overlooked.
 
-The fix is to update podman so its parser understands the newer spec. A user `containers.conf` redirects the CDI search path but podman ignores it and reads `/var/run/cdi` anyway, and `~/.config/cdi` holds two conflicting spec files, cleared as part of the same fix.
+The fix is to update podman so its parser understands the newer spec. I also found that my own `containers.conf` was overriding Podman's built-in CDI paths with a personal one, which made this work only because of a leftover debugging file from the version mismatch. Removing that override left GPU passthrough working the same way, but now on the paths a fresh install already has; `~/.config/cdi` also held two conflicting spec files, which I cleared as part of the same fix.
 
 ### Which compose engine to use
 There are two "podman compose" tools and they don't behave the same. `podman compose` (which delegates to docker-compose) mangles `nvidia.com/gpu=all` into a plain bind-mount and needs the podman socket, which is disabled in rootless. The Python `podman-compose` forwards `--device nvidia.com/gpu=all` to podman untouched, so that's the engine I'll use.

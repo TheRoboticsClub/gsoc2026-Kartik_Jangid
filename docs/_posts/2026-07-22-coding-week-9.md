@@ -1,40 +1,34 @@
 ---
 layout: single
 title: "Coding Week 9 — Podman GPU Passthrough"
-date: 2026-07-22
+date: 2026-07-16
 categories: [gsoc, coding-period]
 tags: [docker, gsoc2026, jderobot, podman, rootless, docker-compose]
 ---
 
 This week focuses on the problems that can occur while working on running the image with podman and GPU enabled and Specifically why these problems occur and possible solution or plan of execution 
 
-## Differences between Docker and Podman with GPU pass-through ?
+## Docker vs Podman GPU pass-through
 As specified in the previous week's blog the podman is daemon-less and that causes me to do the daemon's work. Daemon with root privileges used to nvidia-container-runtime ,finds the driver files and attaches them.Podman uses a different way since it doesn't have Nvidia runtime which is CDI and podman reads this yaml file for details. The CDI spec doesn't just attach the GPU device, it also mounts the NVIDIA driver libraries the container needs to actually render; without them you'd get the device but no working graphics.
 
+## UID/GID and rootless
+Since Podman rootless maps the container's root back to my unprivileged host user  the container thinks it's root, but outside it's just me  a process that tries to access a host device file with the wrong UID or GID gets an error. Most importantly the GPU render node on the host is owned by group `render` and if the container's process doesn't have it's group ID the GPU is denied and it falls back silently to CPU rendering(Silent falling back is a problem).keep-id maps the user to itself inside the container so the file ownership stays same.keep-groups fixes group membership and also carries supplementary required groups. The mechanism is understood but not yet fully in place  keep-groups depends on the crun runtime, which isn't installed on my machine yet. And on my machine this currently works only because my desktop login grants temporary access to the GPU device; that won't exist on a server.
 
-## Why we need group id and user id
-In linux each and every user has UID and belongs to a groups(GID).The Files and devices have owner info(UID) and which group has access(GID).Since Podman rootless maps the container's root back to my unprivileged host user — the container thinks it's root, but outside it's just me — a process that tries to access a host device file with the wrong UID or GID gets an error. Most importantly the GPU render node on the host is owned by group `render` and if the container's process doesn't have it's group ID the GPU is denied and it falls back silently to CPU rendering(Silent falling back is a problem).keep-id maps the user to itself inside the container so the file ownership stays same.keep-groups fixes group membership and also carries supplementary required groups. The mechanism is understood but not yet fully in place — keep-groups depends on the crun runtime, which isn't installed on my machine yet. And on my machine this currently works only because my desktop login grants temporary access to the GPU device; that won't exist on a server, which is another reason the durable fix matters.
-
-## Problems that will occur with their possible solutions
+## Problems and their solutions
 
 ### The blocker: an outdated podman I forgot to update
+This one was my own mistake — I hadn't kept podman updated. When two tools that share a file drift apart in version, one writes something the other can't read. Here `nvidia-ctk` (which generates the CDI spec) wrote a newer field, `additionalGids`, that my older podman's parser doesn't recognize. Instead of ignoring the unknown field, the parser rejects the entire spec (`json: unknown field "additionalGids"`) -> 0 devices found -> no GPU. This happens before compose is even involved, so compose would hit the same wall.
 
-This one was my own mistake  I hadn't kept podman updated. When two tools that share a file drift apart in version, one writes something the other can't read. Here `nvidia-ctk` (which generates the CDI spec) wrote a newer field, `additionalGids`, that my older podman's parser doesn't recognize. Instead of ignoring the unknown field, the parser rejects the entire spec (`json: unknown field "additionalGids"`) -> 0 devices found -> no GPU. This happens before compose is even involved, so compose would hit the same wall.
-
-The fix is to update podman so its parser understands the newer spec. The lesson: with rootless GPU passthrough, the writer and reader of the CDI spec must be version-compatible ,a stale podman silently breaks the whole chain.(New version needs to be installed via homebrew).
-
+The fix is to update podman so its parser understands the newer spec. A user `containers.conf` redirects the CDI search path but podman ignores it and reads `/var/run/cdi` anyway, and `~/.config/cdi` holds two conflicting spec files cleared as part of the same fix.
 
 ### Which compose engine to use
-There are two "podman compose" tools and they don't behave the same. `podman compose` (which delegates to docker-compose) mangles `nvidia.com/gpu=all` into a plain bind-mount and needs the podman socket, which is disabled in rootless. The Python `podman-compose` forwards `--device nvidia.com/gpu=all` to podman untouched  so that's the engine I'll use.
-
-### Config cleanup
-Before any of this works, some stale config needs clearing: a user `containers.conf` redirects the CDI search path but podman ignores it and reads `/var/run/cdi` anyway, and `~/.config/cdi` holds two conflicting spec files.
+There are two "podman compose" tools and they don't behave the same. `podman compose` (which delegates to docker-compose) mangles `nvidia.com/gpu=all` into a plain bind-mount and needs the podman socket, which is disabled in rootless. The Python `podman-compose` forwards `--device nvidia.com/gpu=all` to podman untouched — so that's the engine I'll use.
 
 ### NVIDIA environment variables
-`NVIDIA_DRIVER_CAPABILITIES` stays — it controls which graphics libraries get mounted. `NVIDIA_VISIBLE_DEVICES` is dropped as a GPU selector here: it belongs to the old runtime-hook mechanism, and in CDI mode the device is chosen by its CDI name instead.
+`NVIDIA_DRIVER_CAPABILITIES` stays it controls which graphics libraries get mounted. `NVIDIA_VISIBLE_DEVICES` is dropped as a GPU selector here: it belongs to the old runtime-hook mechanism, and in CDI mode the device is chosen by its CDI name instead.
 
-## Extra read — Optimization of the compose files (doesn't concern Podman, just an observation)
+## Extra read — compose file duplication
 Right now the compose_cfg contains 8 compose files which are mostly identical-every combination of {user, dev} × {cpu, gpu, nvidia, nvidia-windows}.One change needs to be replicated in all other files. I can put base code into one file and put the actual difference(GPU bits) into small override fragments I layer on top.base + nvidia-override, base + intel-override, base + nothing for CPU.
 
 ## Conclusion
-The blocker is understood and has a chosen fix (upgrading podman). The path forward is CDI-based GPU passthrough run through Python `podman-compose`, with keep-id and keep-groups handling rootless identity  executed one tested step at a time 
+The blocker is understood and has a chosen fix (upgrading podman). The path forward is CDI-based GPU passthrough run through Python `podman-compose`, with keep-id and keep-groups handling rootless identity.

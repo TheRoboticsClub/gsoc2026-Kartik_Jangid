@@ -1,6 +1,6 @@
 ---
 layout: single
-title: "GSoC 2026 Final Report — Optimizing RoboticsAcademy's Container Infrastructure"
+title: "GSoC 2026 Final Report - Optimizing RoboticsAcademy's Container Infrastructure"
 date: 2026-08-21
 categories: [gsoc, final-report]
 tags: [docker, gsoc2026, jderobot, podman, optimization, multi-stage-build, rootless, cuda, protobuf, cdi]
